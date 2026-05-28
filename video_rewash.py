@@ -302,10 +302,25 @@ class VideoRewashApp:
         self._stop_flag = False   # 停止信号
 
         # ── 默认路径 ──
-        self.input_dir  = Path.cwd() / DEFAULT_INPUT_DIR
-        self.output_dir = Path.cwd() / DEFAULT_OUTPUT_DIR
-        self.input_dir.mkdir(parents=True, exist_ok=True)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # 使用 exe/脚本自身所在目录，避免 cwd 跑到 C:\Windows\system32 报权限错误
+        if getattr(sys, 'frozen', False):
+            # PyInstaller 打包后的 exe
+            exe_dir = Path(sys.executable).parent
+        else:
+            # 普通 Python 脚本
+            exe_dir = Path.cwd()
+        
+        self.input_dir  = exe_dir / DEFAULT_INPUT_DIR
+        self.output_dir = exe_dir / DEFAULT_OUTPUT_DIR
+        # 创建目录，失败不崩溃（用户可在界面上重新选路径）
+        try:
+            self.input_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.input_dir = exe_dir / DEFAULT_INPUT_DIR  # 重置，不创建
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.output_dir = exe_dir / DEFAULT_OUTPUT_DIR
 
         # ── 日志队列（线程安全地回传日志到主线程） ──
         self.log_queue = queue.Queue()
