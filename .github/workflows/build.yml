@@ -60,7 +60,6 @@ jobs:
           pyinstaller --noconsole --onefile `
             --name "视频去重冲洗工具" `
             --add-data "ffmpeg.exe;." `
-            --icon NUL `
             --clean `
             video_rewash.py
 
