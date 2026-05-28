@@ -1,0 +1,90 @@
+# ==============================================================================
+#  GitHub Actions —— 自动打包 Windows exe
+#  每次 push 到 main 分支或手动触发时，自动在 Windows Server 上编译出 exe
+#  编译产物作为 Artifact 可下载，上传到 Release 后可直接分发给朋友
+# ==============================================================================
+name: 打包 Windows exe
+
+on:
+  # ── 推送到 main 分支时自动触发 ──
+  push:
+    branches: [ main ]
+  # ── 也可以在 GitHub 网页上手动触发 ──
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Windows Server 2022，最接近普通用户 Windows 环境
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. 检出代码 ──
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      # ── 2. 设置 Python 3.11（兼容 Windows 7 及以上所有系统） ──
+      - name: 🐍 设置 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      # ── 3. 安装 PyInstaller ──
+      - name: 📦 安装 PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      # ── 4. 下载 ffmpeg.exe（从官方 release 拉取，无需用户手动下载） ──
+      - name: 🎥 下载 ffmpeg.exe 核心组件
+        run: |
+          # 下载 ffmpeg-release-essentials.zip
+          curl -L -o ffmpeg.zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          # 解压出 ffmpeg.exe
+          python -c "
+          import zipfile, os
+          with zipfile.ZipFile('ffmpeg.zip', 'r') as z:
+              for f in z.namelist():
+                  if f.endswith('ffmpeg.exe'):
+                      z.extract(f, '.')
+                      os.rename(f, 'ffmpeg.exe')
+                      print(f'✅ 已提取: {f} → ffmpeg.exe')
+                      break
+          "
+
+      # ── 5. 用 PyInstaller 打包为单 exe ──
+      - name: 🔨 编译 Windows exe
+        run: |
+          pyinstaller --noconsole --onefile `
+            --name "视频去重冲洗工具" `
+            --add-data "ffmpeg.exe;." `
+            --icon NUL `
+            --clean `
+            video_rewash.py
+
+      # ── 6. 验证打包产物 ──
+      - name: ✅ 验证 exe
+        run: |
+          if (Test-Path "dist/视频去重冲洗工具.exe") {
+              $size = (Get-Item "dist/视频去重冲洗工具.exe").Length / 1MB
+              Write-Host "🎉 打包成功！exe 大小: $([math]::Round($size, 1)) MB"
+          } else {
+              Write-Error "❌ 打包失败，未找到 exe"
+              exit 1
+          }
+
+      # ── 7. 上传 exe 到 GitHub Actions Artifact（可下载） ──
+      - name: 📤 上传 exe 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 视频去重冲洗工具-Windows版
+          path: dist/视频去重冲洗工具.exe
+          if-no-files-found: error
+
+      # ── 8. 发布到 Release（仅在打 git tag 时触发） ──
+      - name: 🏷️ 创建 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/视频去重冲洗工具.exe
+          generate_release_notes: true

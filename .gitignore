@@ -1,0 +1,23 @@
+# PyInstaller 打包产物
+dist/
+build/
+*.spec
+
+# 输入输出视频（不能提交大文件）
+input_videos/
+output_videos/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 系统文件
+Thumbs.db
+.DS_Store
