@@ -161,11 +161,11 @@ def build_filter_string(scale: float, rotate_deg: float, noise_pct: float,
     )
 
     # ── 3. 像素级动态噪点（打碎盲水印核心） ──
-    #     noise 滤镜：alls 控制所有通道强度，c0s/c1s/c2s/c3s 分别控制各分量
-    #     noise_pct 转化为 0~255 范围的强度值
+    #     noise 滤镜：alls 控制所有通道强度
+    #     注意：不要用 allu 参数，部分 FFmpeg 版本不支持
     noise_strength = int(noise_pct * 255 / 100)
     filters.append(
-        f"noise=alls={noise_strength}:allu={noise_strength}"
+        f"noise=alls={noise_strength}"
     )
 
     # ── 4. 光影微调（对比度 + 亮度） ──
@@ -187,6 +187,7 @@ def process_single_video(
     use_nvenc: bool,
     speed: float,
     log_queue: queue.Queue,
+    error_log_path: str = None,  # 错误日志文件路径
 ) -> bool:
     """
     【单条视频冲洗任务】
@@ -194,6 +195,8 @@ def process_single_video(
     log_queue 用于线程安全地将日志发回主界面。
     """
     video_name = Path(input_path).name
+    # 构建完整的命令行字符串（用于日志）
+    cmd_display = None
     try:
         # ── 动态生成随机参数（每条视频不同，打破风控模板） ──
         scale       = random.uniform(1.02, 1.05)
@@ -246,6 +249,9 @@ def process_single_video(
         # 覆盖输出
         cmd.extend(["-y", output_path])
 
+        # 保存完整命令行供调试
+        cmd_display = " ".join(str(x) for x in cmd)
+
         # ── 执行 ──
         log_queue.put(f"[处理中] {video_name}  (缩放×{scale:.3f} / 旋转{rotate_deg:.2f}° / "
                       f"噪点{noise_pct:.1f}% / 对比度{contrast:.3f} / 亮度{brightness:.3f} / "
@@ -262,10 +268,46 @@ def process_single_video(
             log_queue.put(f"  ✅ 【成功】{video_name} 已彻底去重（{accel_tag}）")
             return True
         else:
-            # 截取 FFmpeg 错误信息的最后几行
+            # 从 FFmpeg stderr 中提取真正的错误信息（而非末尾的版本号）
             err_lines = result.stderr.strip().splitlines()
-            err_short = " | ".join(err_lines[-5:]) if err_lines else "未知错误"
-            log_queue.put(f"  ❌ 【失败】{video_name} → {err_short[:150]}")
+            # 过滤掉版本号行和空行，找到真正的错误信息
+            real_errors = []
+            for line in err_lines:
+                lower = line.lower()
+                # 跳过版本号/库信息行
+                if any(x in lower for x in ['libav', 'ffmpeg version', 'configuration', '--enable']):
+                    continue
+                # 保留包含错误关键词的行
+                if any(x in lower for x in ['error', 'invalid', 'cannot', 'not found', 'no such',
+                                              'failed', 'unknown', 'unable', 'filter', 'expects']):
+                    real_errors.append(line.strip())
+            if real_errors:
+                err_short = " | ".join(real_errors[-3:])
+            else:
+                # 没有找到关键词，取中间部分（跳过开头版本信息和末尾空行）
+                start = 2
+                end = len(err_lines) - 2
+                middle = [l.strip() for l in err_lines[start:end] if l.strip()]
+                err_short = " | ".join(middle[-5:]) if middle else "未知错误"
+            
+            # 详细的错误日志（包含完整命令和完整 stderr）
+            log_queue.put(f"  ❌ 【失败】{video_name} → {err_short[:200]}")
+            log_queue.put(f"  🔍 完整命令(供调试): {cmd_display[:300]}...")
+            log_queue.put(f"  📋 FFmpeg 完整报错(最后800字): {result.stderr[-800:].strip()}")
+            
+            # 将完整错误写入日志文件
+            if error_log_path:
+                try:
+                    with open(error_log_path, 'a', encoding='utf-8') as f:
+                        f.write(f"\n{'='*60}\n")
+                        f.write(f"视频: {video_name}\n")
+                        f.write(f"命令: {cmd_display}\n")
+                        f.write(f"返回码: {result.returncode}\n")
+                        f.write(f"完整 stderr:\n{result.stderr}\n")
+                        f.write(f"{'='*60}\n")
+                except Exception:
+                    pass  # 写日志文件失败不阻塞处理
+            
             return False
 
     except sp.TimeoutExpired:
@@ -642,6 +684,9 @@ class VideoRewashApp:
         success_count = 0
         fail_count = 0
 
+        # 创建错误日志文件（放在输出目录里）
+        error_log_path = str(output_dir / "_冲洗错误日志.txt")
+
         try:
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 # 提交所有任务
@@ -670,6 +715,7 @@ class VideoRewashApp:
                         self.use_nvenc,
                         speed,
                         self.log_queue,
+                        error_log_path,
                     )
                     future_map[future] = (i + 1, video_path.name)
 
